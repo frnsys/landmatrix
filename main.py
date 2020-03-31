@@ -8,6 +8,7 @@ and got some clarification:
 
 """
 
+import json
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -122,36 +123,8 @@ for col in count_cols:
     print(deals_df[col].value_counts(normalize=True, dropna=False))
     print('='*20)
 
-# Check that all deals have only one investor country
-# "Operating company" does not appear to mean investor company?
-sizes = defaultdict(int)
-target_cols = ['Country 1', 'Country 2', 'Country 3']
-tn_deals_df = deals_df[deals_df['Deal scope'] == 'transnational']
-ddf = deals_df # tn_deals_df or deals_df
-for i, r in ddf.iterrows():
-    countries = set(r[c] for c in target_cols if isinstance(r[c], str))
-    for c in countries:
-        sizes[c] += r['Size']
-    # print(countries)
-    # assert len(countries) <= 1 # Some don't have any non-nan values here?
-countries = sorted(sizes.keys(), key=lambda k: sizes[k], reverse=True)
-for c in countries:
-    print(c, sizes[c])
-print('='*20)
 
-# Breakdowns by country (top five)
-for c in countries[:5]:
-    print('\n****', c, '****')
-    df = deals_df[(deals_df[target_cols] == c).any(axis=1)]
-    print(len(df), 'deals')
-    for col in count_cols + ['Agriculture']:
-        print(df[col].value_counts(normalize=True, dropna=False))
-        print('~'*20)
-    print(df.groupby('Target country')['Size'].sum())
-    print('='*20)
-
-
-# for i in range(1, 22):
+# Get lat/lngs for deals
 loc_cols = [
     'Location {}: Spatial accuracy level',
     'Location {}: Location',
@@ -162,12 +135,10 @@ loc_cols = [
     'Location {}: Location description',
     'Location {}: Comment on location'
 ]
-
-def dms_to_dd(d, m, s):
-    dd = d + float(m)/60 + float(s)/3600
-    return dd
-
+deal_coords = {}
 for i, row in deals_df.iterrows():
+    id = row['Deal ID']
+    deal_coords[id] = []
     for i in range(1, 22):
         lat = str(row['Location {}: Latitude'.format(i)]).replace(',', '.')
         lng = str(row['Location {}: Longitude'.format(i)]).replace(',', '.')
@@ -181,7 +152,48 @@ for i, row in deals_df.iterrows():
         except ValueError: # probably in degree minute seconds (DMS) format
             lng = dms2dec(lng)
 
+        country = row['Location {}: Target country'.format(i)]
         accuracy = row['Location {}: Spatial accuracy level'.format(i)]
         if np.isnan(lat):
             break
-        # print((lat, lng), accuracy)
+        deal_coords[id].append({
+            'coords': (lat, lng),
+            'country': country,
+            'accuracy': accuracy,
+            'agriculture': row['Agriculture'],
+            'size': row['Size']
+        })
+
+# Check that all deals have only one investor country
+# "Operating company" does not appear to mean investor company?
+importers = defaultdict(list)
+sizes = defaultdict(int)
+target_cols = ['Country 1', 'Country 2', 'Country 3']
+tn_deals_df = deals_df[deals_df['Deal scope'] == 'transnational']
+ddf = deals_df # tn_deals_df or deals_df
+for i, r in ddf.iterrows():
+    id = r['Deal ID']
+    countries = set(r[c] for c in target_cols if isinstance(r[c], str))
+    for c in countries:
+        sizes[c] += r['Size']
+        for deal in deal_coords[id]:
+            if deal['agriculture']:
+                importers[c].append(deal)
+countries = sorted(sizes.keys(), key=lambda k: sizes[k], reverse=True)
+for c in countries:
+    print(c, sizes[c])
+print('='*20)
+
+with open('importers.json', 'w') as f:
+    json.dump(importers, f)
+
+# Breakdowns by country (top five)
+for c in countries[:5]:
+    print('\n****', c, '****')
+    df = deals_df[(deals_df[target_cols] == c).any(axis=1)]
+    print(len(df), 'deals')
+    for col in count_cols + ['Agriculture']:
+        print(df[col].value_counts(normalize=True, dropna=False))
+        print('~'*20)
+    print(df.groupby('Target country')['Size'].sum())
+    print('='*20)
